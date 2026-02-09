@@ -42,7 +42,11 @@ class LayerNorm(torch.nn.Module):
             torch.Tensor: The normalized tensor.
         """
         # todo
-        raise NotImplementedError
+        mean = x.mean(dim=-1, keepdim=True)
+        var = x.var(dim=-1, keepdim=True, unbiased=False)
+        return (x - mean) / torch.sqrt(var + self.eps)
+
+        
 
     def forward(self, x):
         """
@@ -106,7 +110,15 @@ class Attention(nn.Module):
         jointly using matrix/tensor operations.
         '''
         # todo
-        raise NotImplementedError
+        batch_size, n_local_heads, seqlen, head_dim = query.shape
+        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(head_dim)  
+        if self.causal:
+            mask = self.causal_mask[:seqlen, :seqlen]
+            scores = scores.masked_fill(mask == 0, float('-inf'))
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = self.attn_dropout(attn_weights)
+        output = torch.matmul(attn_weights, value)
+        return output
 
 
     def forward(
@@ -171,6 +183,7 @@ class FeedForward(nn.Module):
         '''
         Compute the SwiGLU activation function (see Section 2 in
         https://arxiv.org/abs/2204.02311
+        
         '''
         return F.silu(self.w1(x)) * self.w3(x)
 
