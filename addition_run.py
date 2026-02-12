@@ -18,7 +18,7 @@ from config import LlamaConfig
 
 from torch.nn import functional as F
 import torch.nn.functional as F
-from torch.optim import AdamW
+#from torch.optim import AdamW
 from tqdm import tqdm
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
@@ -64,14 +64,52 @@ def train_one_epoch(model, loader, optimizer, device):
         token id for "=" is 12. 
     """
     # # todo
-    # model.train()
-    # total_loss = 0
-    # n_batches = 0
-    # for ...
+    model.train()
+    total_loss = 0
+    n_batches = 0
+    for batch in tqdm(loader):
+              # batch[0] = input tokens, batch[1] = target tokens
+        inputs, targets = batch
+        inputs, targets = inputs.to(device), targets.to(device)
+        
+        # Create mask to only compute loss on answer tokens (after "=")
+        # Token id for "=" is 12
+        # Convert targets to a loss mask: 1 for answer positions, 0 for question/padding
+        loss_mask = torch.zeros_like(targets)
+        
+        for i in range(targets.shape[0]):
+            # Find the position of "=" (token 12)
+            eq_positions = (targets[i] == 12).nonzero(as_tuple=True)[0]
+            if len(eq_positions) > 0:
+                # Mark "=" and all positions after as answer positions
+                eq_pos = eq_positions[0].item()
+                loss_mask[i, eq_pos:] = 1
+            # Also keep -1 as ignore (padding), convert to 0
+        
+        loss_mask = loss_mask.bool()
+        loss_mask &= targets != -1
+        targets[targets == -1] = 0
 
-    # return total_loss / n_batches
+        optimizer.zero_grad()
+        logits, _ = model(inputs, targets)
+        
+        # Compute loss only on answer tokens
+        logits_flat = logits.view(-1, logits.size(-1))
+        targets_flat = targets.view(-1)
+        mask_flat = loss_mask.view(-1)
+        
+        if mask_flat.sum() > 0:
+            loss = F.cross_entropy(logits_flat[mask_flat], targets_flat[mask_flat])
+        else:
+            loss = torch.tensor(0.0, device=device, requires_grad=True)
+        
+        loss.backward()
+        optimizer.step()
 
-    raise NotImplementedError
+        total_loss += loss.item()
+        n_batches += 1
+
+    return total_loss / n_batches
 
 
 @torch.no_grad()
@@ -96,14 +134,43 @@ def evaluate_loss(model, loader, device):
         token id for "=" is 12. 
     """
     # todo
-    # model.eval()
-    # total_loss = 0
-    # n_batches = 0
-    # for ...
+    model.eval()
+    total_loss = 0
+    n_batches = 0
+    for batch in tqdm(loader):
+        # batch[0] = input tokens, batch[1] = target tokens
+        inputs, targets = batch
+        inputs, targets = inputs.to(device), targets.to(device)
 
-    # return total_loss / n_batches
+        # Create mask to only compute loss on answer tokens (after "=")
+        # Token id for "=" is 12
+        loss_mask = torch.zeros_like(targets)
+        
+        for i in range(targets.shape[0]):
+            # Find the position of "=" (token 12)
+            eq_positions = (targets[i] == 12).nonzero(as_tuple=True)[0]
+            if len(eq_positions) > 0:
+                # Mark "=" and all positions after as answer positions
+                eq_pos = eq_positions[0].item()
+                loss_mask[i, eq_pos:] = 1
+        
+        loss_mask = loss_mask.bool()
+        loss_mask &= targets != -1
+        targets[targets == -1] = 0
 
-    raise NotImplementedError
+        logits, _ = model(inputs, targets)
+        
+        # Compute loss only on answer tokens
+        logits_flat = logits.view(-1, logits.size(-1))
+        targets_flat = targets.view(-1)
+        mask_flat = loss_mask.view(-1)
+        
+        if mask_flat.sum() > 0:
+            loss = F.cross_entropy(logits_flat[mask_flat], targets_flat[mask_flat])
+            total_loss += loss.item()
+            n_batches += 1
+
+    return total_loss / n_batches if n_batches > 0 else 0.0
 
 
 
@@ -160,7 +227,7 @@ def model_training(args):
     model_config = {
         "vocab_size": 13,
         "dim": args.dim,
-        "dropout": 0.0,
+        "dropout": args.dropout,
         "n_layers": args.n_layers,
         "n_heads": args.n_heads,
         "n_kv_heads": args.n_kv_heads,
@@ -331,7 +398,7 @@ def load_config(save_dir, filename):
 
 def load_model(save_dir, filename, model, device):
     filepath = os.path.join(save_dir, filename)
-    checkpoint = torch.load(filepath, map_location=device)
+    checkpoint = torch.load(filepath, map_location=device, weights_only=False)
 
     state_dict = checkpoint["model"]
 
@@ -363,7 +430,7 @@ def save_experiment_info(model, model_config, train_config, accuracy, results, s
         "model_config": model_config,
         "train_config": train_config,
         "num_params": num_params,
-        # "predictions": predictions,
+        #"predictions": predictions,
         "accuracy": accuracy
     }
 
@@ -508,6 +575,7 @@ def get_args():
     train_parser.add_argument("--n_layers", type=int, default=6)
     train_parser.add_argument("--n_heads", type=int, default=4)
     train_parser.add_argument("--n_kv_heads", type=int, default=4)
+    train_parser.add_argument("--dropout", type=float, default=0.0)
     train_parser.add_argument("--capacity", type=int, default=5808844800000)
 
 

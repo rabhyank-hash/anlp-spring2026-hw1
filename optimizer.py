@@ -35,7 +35,7 @@ class AdamW(Optimizer):
 
             # TODO: Clip gradients if max_grad_norm is set
             if group['max_grad_norm'] is not None:
-                raise NotImplementedError()
+                torch.nn.utils.clip_grad_norm_(group["params"], group['max_grad_norm'])
             
             for p in group["params"]:
                 if p.grad is None:
@@ -44,23 +44,48 @@ class AdamW(Optimizer):
                 if grad.is_sparse:
                     raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
 
-                raise NotImplementedError()
-
                 # State should be stored in this dictionary
                 state = self.state[p]
 
                 # TODO: Access hyperparameters from the `group` dictionary
                 alpha = group["lr"]
+                beta1, beta2 = group["betas"]
+                eps = group["eps"]
+                weight_decay = group["weight_decay"]
+                correct_bias = group["correct_bias"]
 
                 # TODO: Update first and second moments of the gradients
+                if len(state) == 0:
+                    state['step'] = 0
+                    state['m'] = torch.zeros_like(p.data)
+                    state['v'] = torch.zeros_like(p.data)
+
+                state['step'] += 1
+                t = state['step']
+                m = state['m']
+                v = state['v']
+                
+                m.mul_(beta1).add_(grad, alpha=1 - beta1)
+                v.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
                 # TODO: Bias correction
                 # Please note that we are using the "efficient version" given in Algorithm 2 
                 # https://arxiv.org/pdf/1711.05101
-
+                if correct_bias:
+                    bias_correction1 = 1 - beta1 ** t
+                    bias_correction2 = 1 - beta2 ** t
+                    alpha_corrected = alpha / bias_correction1
+                    denominator = (v.sqrt() / bias_correction2 ** 0.5) + eps
+                else:
+                    alpha_corrected = alpha
+                    denominator = v.sqrt() + eps
+                
                 # TODO: Update parameters
+                p.data.add_(m / denominator, alpha=-alpha_corrected)
 
                 # TODO: Add weight decay after the main gradient-based updates.
                 # Please note that the learning rate should be incorporated into this update.
+                if weight_decay > 0:
+                    p.data.mul_(1 - alpha * weight_decay)
 
         return loss
