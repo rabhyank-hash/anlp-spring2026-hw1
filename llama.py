@@ -42,7 +42,10 @@ class LayerNorm(torch.nn.Module):
             torch.Tensor: The normalized tensor.
         """
         # todo
-        raise NotImplementedError
+        mean = x.mean(dim=-1, keepdim=True)
+        var = x.var(dim=-1, keepdim=True, unbiased=False)
+        return (x - mean) / torch.sqrt(var + self.eps)
+        
 
     def forward(self, x):
         """
@@ -106,7 +109,14 @@ class Attention(nn.Module):
         jointly using matrix/tensor operations.
         '''
         # todo
-        raise NotImplementedError
+        batch_size, n_local_heads, seqlen, head_dim = query.shape
+        attn_weights = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(head_dim)
+        if self.causal:
+            attn_weights = attn_weights.masked_fill(self.causal_mask[:seqlen, :seqlen] == 0, float('-inf'))
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        attn_weights = self.attn_dropout(attn_weights)
+        output = torch.matmul(attn_weights, value)
+        return output
 
 
     def forward(
@@ -211,7 +221,9 @@ class LlamaLayer(nn.Module):
            output of the feed-forward network
         '''
         # todo
-        raise NotImplementedError
+        h = x + self.attention(self.attention_norm(x))
+        h = h + self.feed_forward(self.ffn_norm(h))
+        return h 
 
 class Llama(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
@@ -302,10 +314,17 @@ class Llama(LlamaPreTrainedModel):
                 7) Sample from this filtered probability distribution.
                 '''
                 # todo 
-
-                raise NotImplementedError
                 # map to original vocab indices
-                idx_next = None
+                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                sorted_probs = F.softmax(sorted_logits / temperature, dim=-1)
+                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                sorted_indices_to_remove = cumulative_probs > top_p
+                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                sorted_indices_to_remove[..., 0] = 0
+                indices_to_remove = sorted_indices[sorted_indices_to_remove]
+                logits[:, indices_to_remove] = float('-inf')
+                probs = F.softmax(logits / temperature, dim=-1)
+                idx_next = torch.multinomial(probs, num_samples=1)
             
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)

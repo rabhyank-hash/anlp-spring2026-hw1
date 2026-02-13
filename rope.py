@@ -63,13 +63,35 @@ def apply_rotary_emb(
 
     # First, compute the trigonometric values in the second and fourth columns in
     # slide 49 (linked above).
-
+    
+    # Compute the inverse frequencies: theta_j = theta^(-2j/d)
+    inv_freq = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float().to(device) / head_dim))
+    
+    # Compute the angles: m * theta_j for each position m in sequence and dimension j
+    t = torch.arange(seqlen, device=device).type_as(inv_freq)  # [seqlen]
+    freqs = torch.einsum("i,j->ij", t, inv_freq)  # [seqlen, head_dim/2]
+    
     # Then, combine these trigonometric values with the tensors query_real, query_imag,
     # key_real, and key_imag.
-
-    raise NotImplementedError
-
-    query_out = None
-    key_out = None
+    
+    # Apply rotation using complex multiplication formula:
+    # (a + bi)(cos(θ) + i*sin(θ)) = (a*cos(θ) - b*sin(θ)) + i(a*sin(θ) + b*cos(θ))
+    cos_freqs = freqs.cos()  # [seqlen, head_dim/2]
+    sin_freqs = freqs.sin()  # [seqlen, head_dim/2]
+    
+    # Reshape for broadcasting: [seqlen, head_dim/2] -> [1, seqlen, 1, head_dim/2]
+    cos_freqs = cos_freqs[None, :, None, :]
+    sin_freqs = sin_freqs[None, :, None, :]
+    
+    query_out_real = query_real * cos_freqs - query_imag * sin_freqs
+    query_out_imag = query_real * sin_freqs + query_imag * cos_freqs
+    
+    key_out_real = key_real * cos_freqs - key_imag * sin_freqs
+    key_out_imag = key_real * sin_freqs + key_imag * cos_freqs
+    
+    # Recombine the real and imaginary parts back to original shape
+    query_out = torch.stack([query_out_real, query_out_imag], dim=-1).flatten(-2).type_as(query)
+    key_out = torch.stack([key_out_real, key_out_imag], dim=-1).flatten(-2).type_as(key)
+    
     # Return the rotary position embeddings for the query and key tensors
     return query_out, key_out
